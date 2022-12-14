@@ -835,7 +835,7 @@ def train():
                 # print(rays_depth.shape)
                 rays_depth = np.transpose(rays_depth, [1,0,2])
                 depth_value = np.repeat(depth_gts[i]['depth'][:,None,None], 3, axis=2) # N x 1 x 3
-                weights = np.repeat(depth_gts[i]['error'][:,None,None], 3, axis=2) # N x 1 x 3
+                weights = np.repeat(depth_gts[i]['weight'][:,None,None], 3, axis=2) # N x 1 x 3
                 rays_depth = np.concatenate([rays_depth, depth_value, weights], axis=1) # N x 4 x 3
                 rays_depth_list.append(rays_depth)
 
@@ -1077,7 +1077,7 @@ def train():
 
             filenames = [os.path.join(testsavedir, '{:03d}.png'.format(k)) for k in range(len(i_test))]
 
-            test_loss = img2mse(torch.Tensor(rgbs), images[i_test])
+            test_loss = img2mse(torch.Tensor(rgbs).to(device), images[i_test])
             test_psnr = mse2psnr(test_loss)
 
     
