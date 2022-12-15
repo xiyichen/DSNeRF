@@ -1079,6 +1079,7 @@ def train():
 
             test_loss = img2mse(torch.tensor(rgbs).to(device), images[i_test])
             test_psnr = mse2psnr(test_loss)
+            print(f"[TEST] Iter: {i} Loss: {test_loss.item()}  PSNR: {test_psnr.item()}")
 
     
         if i%args.i_print==0:
