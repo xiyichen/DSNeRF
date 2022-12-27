@@ -257,8 +257,9 @@ def get_rays(H, W, focal, c2w):
     return rays_o, rays_d
 
 
-def get_rays_np(H, W, focal, c2w):
+def get_rays_np(H, W, focal, c2w, mask=None):
     i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing='xy') # i: H x W, j: H x W
+
     dirs = np.stack([(i-W*.5)/focal, -(j-H*.5)/focal, -np.ones_like(i)], -1) # dirs: H x W x 3
     # Rotate ray directions from camera frame to the world frame
     rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]

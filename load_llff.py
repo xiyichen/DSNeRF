@@ -13,11 +13,13 @@ def _minify(basedir, factors=[], resolutions=[]):
     needtoload = False
     for r in factors:
         imgdir = os.path.join(basedir, 'images_{}'.format(r))
-        if not os.path.exists(imgdir):
+        maskdir = os.path.join(basedir, 'masks_{}'.format(r))
+        if not os.path.exists(imgdir) or not os.path.exists(maskdir):
             needtoload = True
     for r in resolutions:
         imgdir = os.path.join(basedir, 'images_{}x{}'.format(r[1], r[0]))
-        if not os.path.exists(imgdir):
+        maskdir = os.path.join(basedir, 'masks_{}x{}'.format(r[1], r[0]))
+        if not os.path.exists(imgdir) or not os.path.exists(maskdir):
             needtoload = True
     if not needtoload:
         return
@@ -59,6 +61,41 @@ def _minify(basedir, factors=[], resolutions=[]):
             check_output('rm {}/*.{}'.format(imgdir, ext), shell=True)
             print('Removed duplicates')
         print('Done')
+    
+    maskdir = os.path.join(basedir, 'masks')
+    masks = [os.path.join(maskdir, f) for f in sorted(os.listdir(maskdir))]
+    masks = [f for f in masks if any([f.endswith(ex) for ex in ['JPG', 'jpg', 'png', 'jpeg', 'PNG']])]
+    maskdir_orig = maskdir
+    
+    wd = os.getcwd()
+    
+    for r in factors + resolutions:
+        if isinstance(r, int):
+            name = 'masks_{}'.format(r)
+            resizearg = '{}%'.format(100./r)
+        else:
+            name = 'masks_{}x{}'.format(r[1], r[0])
+            resizearg = '{}x{}'.format(r[1], r[0])
+        maskdir = os.path.join(basedir, name)
+        if os.path.exists(maskdir):
+            continue
+            
+        print('Minifying', r, basedir)
+        
+        os.makedirs(maskdir)
+        check_output('cp {}/* {}'.format(maskdir_orig, maskdir), shell=True)
+        
+        ext = masks[0].split('.')[-1]
+        args = ' '.join(['mogrify', '-resize', resizearg, '-format', 'png', '*.{}'.format(ext)])
+        print(args)
+        os.chdir(maskdir)
+        check_output(args, shell=True)
+        os.chdir(wd)
+        
+        if ext != 'png':
+            check_output('rm {}/*.{}'.format(maskdir, ext), shell=True)
+            print('Removed duplicates')
+        print('Done')
             
         
         
@@ -97,7 +134,13 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
         print( imgdir, 'does not exist, returning' )
         return
     
+    maskdir = os.path.join(basedir, 'masks' + sfx)
+    if not os.path.exists(maskdir):
+        print( maskdir, 'does not exist, returning' )
+        return
+    
     imgfiles = [os.path.join(imgdir, f) for f in sorted(os.listdir(imgdir)) if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')]
+    maskfiles = [os.path.join(maskdir, f) for f in sorted(os.listdir(maskdir)) if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')]
     if poses.shape[-1] != len(imgfiles):
         print( 'Mismatch between imgs {} and poses {} !!!!'.format(len(imgfiles), poses.shape[-1]) )
         return
@@ -115,11 +158,17 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
         else:
             return imageio.imread(f)
         
-    imgs = imgs = [imread(f)[...,:3]/255. for f in imgfiles]
+    imgs = [imread(f)[...,:3]/255. for f in imgfiles]
     imgs = np.stack(imgs, -1)  
+
+    masks = [imread(f)/255. for f in maskfiles]
+    masks = np.stack(masks, -1)
+    masks[masks<0.5] = 0
+    masks[masks>=0.5] = 1
     
     print('Loaded image data', imgs.shape, poses[:,-1,0])
-    return poses, bds, imgs
+    print('Loaded mask data', masks.shape, poses[:,-1,0])
+    return poses, bds, imgs, masks
 
     
             
@@ -247,7 +296,7 @@ def spherify_poses(poses, bds):
 def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=False, path_zflat=False):
     
 
-    poses, bds, imgs = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
+    poses, bds, imgs, masks = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
     print('Loaded', basedir, bds.min(), bds.max())
     
     # print('poses_bound.npy:\n', poses[:,:,0])
@@ -256,6 +305,7 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1) # [-u, r, -t] -> [r, u, -t]
     poses = np.moveaxis(poses, -1, 0).astype(np.float32)
     imgs = np.moveaxis(imgs, -1, 0).astype(np.float32)
+    masks = np.moveaxis(masks, -1, 0).astype(np.float32)
     images = imgs
     bds = np.moveaxis(bds, -1, 0).astype(np.float32)
     print("bds:", bds[0])
@@ -321,8 +371,9 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     
     images = images.astype(np.float32)
     poses = poses.astype(np.float32)
+    masks = masks.astype(np.float32)
 
-    return images, poses, bds, render_poses, i_test
+    return images, poses, masks, bds, render_poses, i_test
 
 
 def get_poses(images):
@@ -347,7 +398,7 @@ def load_colmap_depth(basedir, factor=8, bd_factor=.75):
     print("Mean Projection Error:", Err_mean)
     
     poses = get_poses(images)
-    _, bds_raw, _ = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
+    _, bds_raw, _, _ = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
     bds_raw = np.moveaxis(bds_raw, -1, 0).astype(np.float32)
     # print(bds_raw.shape)
     # Rescale if bd_factor is provided
@@ -396,7 +447,7 @@ def load_sensor_depth(basedir, factor=8, bd_factor=.75):
     print("Mean Projection Error:", Err_mean)
     
     poses = get_poses(images)
-    _, bds_raw, _ = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
+    _, bds_raw, _, _ = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
     bds_raw = np.moveaxis(bds_raw, -1, 0).astype(np.float32)
     # print(bds_raw.shape)
     # Rescale if bd_factor is provided

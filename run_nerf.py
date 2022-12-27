@@ -652,12 +652,12 @@ def train():
     elif args.dataset_type == 'llff':
         if args.colmap_depth:
             depth_gts = load_colmap_depth(args.datadir, factor=args.factor, bd_factor=.75)
-        images, poses, bds, render_poses, i_test = load_llff_data(args.datadir, args.factor,
+        images, poses, masks, bds, render_poses, i_test = load_llff_data(args.datadir, args.factor,
                                                                   recenter=True, bd_factor=.75,
                                                                   spherify=args.spherify)
         hwf = poses[0,:3,-1]
         poses = poses[:,:3,:4]
-        print('Loaded llff', images.shape, render_poses.shape, hwf, args.datadir)
+        print('Loaded llff', images.shape, masks.shape, render_poses.shape, hwf, args.datadir)
         if not isinstance(i_test, list):
             i_test = [i_test]
 
@@ -812,6 +812,7 @@ def train():
     if use_batching:
         # For random ray batching
         print('get rays')
+        # pass in masks to get_rays_np, and remove coords within the mask for each image
         rays = np.stack([get_rays_np(H, W, focal, p) for p in poses[:,:3,:4]], 0) # [N, ro+rd, H, W, 3]
         if args.debug:
             print('rays.shape:', rays.shape)
@@ -820,9 +821,19 @@ def train():
         if args.debug:
             print('rays_rgb.shape:', rays_rgb.shape)
         rays_rgb = np.transpose(rays_rgb, [0,2,3,1,4]) # [N, H, W, ro+rd+rgb, 3]
-        rays_rgb = np.stack([rays_rgb[i] for i in i_train], 0) # train images only
-        rays_rgb = np.reshape(rays_rgb, [-1,3,3]) # [(N-1)*H*W, ro+rd+rgb, 3]
+        rays_rgb = np.stack([rays_rgb[i] for i in i_train], 0) # train images only # [N-1, H, W, 3, 3]
+        mask_train = np.stack([masks[i] for i in i_train], 0) # [N-1, H, W]
+        rays_rgb_segmented = []
+        for i in range(len(rays_rgb)):
+            for h in range(H):
+                for w in range(W):
+                    if mask_train[i][h][w] == 0:
+                        rays_rgb_segmented.append(rays_rgb[i][h][w])
+        rays_rgb = np.stack(rays_rgb_segmented, 0)
+        # rays_rgb = np.reshape(rays_rgb, [-1,3,3]) # [(N-1)*H*W, ro+rd+rgb, 3]
         rays_rgb = rays_rgb.astype(np.float32)
+        # print(rays_rgb)
+        # print(rays_rgb.shape)
         print('shuffle rays')
         np.random.shuffle(rays_rgb)
 
@@ -831,14 +842,22 @@ def train():
             print('get depth rays')
             rays_depth_list = []
             for i in i_train:
+                # filter out masks for training images from depth_gts[i]['coord']
+                depth_gts_i_filtered = []
+                for point in depth_gts[i]['coord']:
+                    x = point[0]
+                    y = point[1]
+                    if masks[i][int(np.floor(y))][int(np.floor(x))] == 0 and masks[i][int(np.floor(y))][int(np.ceil(x))] == 0 and \
+                    masks[i][int(np.ceil(y))][int(np.floor(x))] == 0 and masks[i][int(np.ceil(y))][int(np.ceil(x))] == 0:
+                        depth_gts_i_filtered.append(point)
+                depth_gts_i_filtered = np.array(depth_gts_i_filtered)
+                # print(depth_gts[i]['coord'].shape, depth_gts_i_filtered.shape)
                 rays_depth = np.stack(get_rays_by_coord_np(H, W, focal, poses[i,:3,:4], depth_gts[i]['coord']), axis=0) # 2 x N x 3
-                # print(rays_depth.shape)
                 rays_depth = np.transpose(rays_depth, [1,0,2])
                 depth_value = np.repeat(depth_gts[i]['depth'][:,None,None], 3, axis=2) # N x 1 x 3
                 weights = np.repeat(depth_gts[i]['weight'][:,None,None], 3, axis=2) # N x 1 x 3
                 rays_depth = np.concatenate([rays_depth, depth_value, weights], axis=1) # N x 4 x 3
                 rays_depth_list.append(rays_depth)
-
             rays_depth = np.concatenate(rays_depth_list, axis=0)
             print('rays_weights mean:', np.mean(rays_depth[:,3,0]))
             print('rays_weights std:', np.std(rays_depth[:,3,0]))
