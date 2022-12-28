@@ -12,7 +12,13 @@ from matplotlib import pyplot as plt
 
 
 # Misc
-img2mse = lambda x, y : torch.mean((x - y) ** 2)
+def img2mse(x, y, mask=None):
+    L = (x - y) ** 2
+    if mask is not None:
+        # N, H, W
+        L *= torch.tensor(mask, device=x.device).unsqueeze(3).repeat(1,1,1,3)
+    return L[L!=0].mean()
+# img2mse = lambda x, y : torch.mean((x - y) ** 2)
 mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]).to(device))
 to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
